@@ -1,0 +1,11 @@
+[package]
+name = "velo-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+velo-types = { path = "../velo-types" }
+libloading = "0.7"          # or the latest compatible version

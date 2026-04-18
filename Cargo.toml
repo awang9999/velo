@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "velo-types",
+    "velo-core",
+    "velo-plugin",
+    "velo-app",
+    "velo-tui",
+    "velo-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Velo Contributors"]
+license = "MIT"
+repository = "https://github.com/velo-editor/velo"
+
+[workspace.dependencies]
+# Shared dependencies across crates
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+thiserror = "1.0"

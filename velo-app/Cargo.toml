@@ -1,0 +1,13 @@
+[package]
+name = "velo-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+velo-types = { path = "../velo-types" }
+velo-core = { path = "../velo-core" }
+velo-plugin = { path = "../velo-plugin" }
+tokio = { workspace = true }

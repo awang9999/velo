@@ -1,0 +1,10 @@
+[package]
+name = "velo-types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Zero external dependencies as per requirement 1.2

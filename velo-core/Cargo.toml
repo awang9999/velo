@@ -1,0 +1,16 @@
+[package]
+name = "velo-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+velo-types = { path = "../velo-types" }
+velo-plugin = { path = "../velo-plugin" }
+tokio = { workspace = true, features = ["sync", "rt-multi-thread"] }
+ropey = "1.6"
+tree-sitter = "0.20"
+serde = "1.0"
+toml = "0.8"
