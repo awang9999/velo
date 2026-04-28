@@ -148,7 +148,7 @@ This plan implements Velo, a high-performance post-modern text editor written in
     - **Validates: Requirements 10.6, 10.7, 11.4**
     - Verify `on_load` called once before any `on_event`, `on_unload` called once after all events
   
-  - [~] 6.8 Implement plugin installation command
+  - [x] 6.8 Implement plugin installation command
     - Implement `:plugin install <name>` command handler
     - Download plugin binary and write to `~/.config/velo/plugins/`
     - Notify user that restart is required
@@ -298,17 +298,17 @@ This plan implements Velo, a high-performance post-modern text editor written in
     - Verify buffer minor_modes Vec returns to original state
 
 - [~] 11. Implement velo-tui frontend
-  - [~] 11.1 Set up velo-tui crate
+  - [x] 11.1 Set up velo-tui crate
     - Add dependencies: `ratatui`, `crossterm`, `tokio`, `velo-app`, `velo-types`
     - _Requirements: 18.1_
   
-  - [~] 11.2 Implement input polling with crossterm
+  - [x] 11.2 Implement input polling with crossterm
     - Poll raw input events using crossterm
     - Convert to InputEvent values
     - Send to velo-app via `input_tx` channel without blocking render loop
     - _Requirements: 18.2, 18.5_
   
-  - [~] 11.3 Implement render loop with ratatui
+  - [x] 11.3 Implement render loop with ratatui
     - Acquire `Arc<RwLock<RenderState>>` read lock
     - Render latest RenderState snapshot
     - Release lock immediately

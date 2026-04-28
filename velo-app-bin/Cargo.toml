@@ -1,0 +1,12 @@
+[package]
+name = "velo-app-bin"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+velo-app = { path = "../velo-app" }
+velo-core = { path = "../velo-core" }
+velo-tui = { path = "../velo-tui" }
+velo-types = { path = "../velo-types"}
+crossterm = "0.27"
+tokio = { workspace = true }

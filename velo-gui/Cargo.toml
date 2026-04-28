@@ -9,4 +9,5 @@ repository.workspace = true
 [dependencies]
 velo-types = { path = "../velo-types" }
 velo-app = { path = "../velo-app" }
+velo-core = { path = "../velo-core" }
 tokio = { workspace = true }

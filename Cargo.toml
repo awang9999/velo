@@ -5,6 +5,7 @@ members = [
     "velo-core",
     "velo-plugin",
     "velo-app",
+    "velo-app-bin",   # <‑ add this line
     "velo-tui",
     "velo-gui",
 ]
