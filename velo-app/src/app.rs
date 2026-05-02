@@ -29,7 +29,7 @@ impl App {
             state: EditorState::new(),
             input_rx,
             render_state,
-            exit_key: "Ctrl+Q".to_string(),
+            exit_key: "Ctrl+q".to_string(),
         }
     }
 

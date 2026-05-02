@@ -9,4 +9,5 @@ velo-core = { path = "../velo-core" }
 velo-tui = { path = "../velo-tui" }
 velo-types = { path = "../velo-types"}
 crossterm = "0.27"
+ratatui = { version = "0.28", default-features = false, features = ["crossterm"] }
 tokio = { workspace = true }
