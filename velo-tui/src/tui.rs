@@ -202,8 +202,6 @@ impl Tui {
                         f.render_widget(status_paragraph, chunks[1]);
                     })
                     .ok();
-
-                sleep(Duration::from_millis(33)).await;
             }
         })
     }
