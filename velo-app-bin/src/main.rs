@@ -5,10 +5,10 @@ use velo_tui::Tui;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tui = Tui::new();
+    let (tui, rx) = Tui::new();
 
     // 1. Capture the handle returned by start_render_loop
-    let render_handle = tui.start_render_loop();
+    let render_handle = tui.start_render_loop(rx);
 
     // 2. WAIT for the render loop to finish.
     // The render loop only finishes if the task is aborted

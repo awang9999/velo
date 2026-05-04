@@ -9,9 +9,8 @@ use crossterm::terminal::{enable_raw_mode, Clear, ClearType, EnterAlternateScree
 use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-// use tokio::sync::mpsc::{channel, Sender};
 use tokio::spawn;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, Duration}; // Add this import
 
 // use velo_app::App;
@@ -30,6 +29,7 @@ pub struct Tui {
     pub buf: Arc<RwLock<String>>,
     pub status: Arc<RwLock<String>>,
     pub quit: Arc<RwLock<bool>>,
+    pub tx: mpsc::Sender<()>,
 }
 
 impl Tui {
@@ -37,7 +37,7 @@ impl Tui {
     /// A bounded channel is created for sending input events to the core.
     /// The channel receiver is handed to the `App` constructor.
     /// An async task is spawned to poll the terminal and forward events.
-    pub fn new() -> Self {
+    pub fn new() -> (Self, mpsc::Receiver<()>) {
         // Channel used to send `EditorEvent` values from the UI to the core.
         // let (input_tx, input_rx) = channel::<EditorEvent>(100);
 
@@ -53,13 +53,18 @@ impl Tui {
         let status = Arc::new(RwLock::new("Welcome to Velo!".to_string()));
         let buf = Arc::new(RwLock::new("Hello Velo".to_string()));
         let quit = Arc::new(RwLock::new(false));
+        let (tx, rx) = mpsc::channel(1);
 
         let status_for_task = Arc::clone(&status);
         let buf_for_task = Arc::clone(&buf);
         let quit_for_task = Arc::clone(&quit);
+        let tx_for_task = tx.clone();
 
         // Spawn an async task that continuously polls for terminal events.
         spawn(async move {
+            // Send first event to render channel
+            let _ = tx_for_task.send(()).await;
+
             loop {
                 // 1. Try to read the event first
                 let ev = match event::read() {
@@ -67,6 +72,7 @@ impl Tui {
                     Err(e) => {
                         let mut status_write = status_for_task.write().await;
                         *status_write = format!("Error reading event: {}", e);
+                        let _ = tx_for_task.send(()).await;
                         continue; // Skip this iteration and try again
                     }
                 };
@@ -80,21 +86,26 @@ impl Tui {
                             *status_write = format!("Pressed character: {}", c);
                             let mut buf_write = buf_for_task.write().await;
                             buf_write.push(c);
+
+                            let _ = tx_for_task.send(()).await;
                         }
                         KeyCode::Enter => {
                             let mut status_write = status_for_task.write().await;
                             *status_write = "Enter pressed".to_string();
+                            let _ = tx_for_task.send(()).await;
                         }
                         KeyCode::Backspace => {
                             let mut status_write = status_for_task.write().await;
                             *status_write = "Backspace pressed".to_string();
                             let mut buf_write = buf_for_task.write().await;
                             buf_write.pop();
+                            let _ = tx_for_task.send(()).await;
                         }
                         KeyCode::Esc => {
                             // Quit key
                             let mut quit_write = quit_for_task.write().await;
                             *quit_write = true;
+                            let _ = tx_for_task.send(()).await;
                             break;
                         }
                         _ => {}
@@ -103,20 +114,25 @@ impl Tui {
                     CEvent::Resize(width, height) => {
                         let mut status_write = status_for_task.write().await;
                         *status_write = format!("Window resized: {}x{}", width, height);
+                        let _ = tx_for_task.send(()).await;
                     }
                     CEvent::FocusGained | CEvent::FocusLost | CEvent::Paste(_) => todo!(),
                 }
             }
         });
 
-        Self {
-            // app,
-            // input_tx,
-            // render_state,
-            buf,
-            status,
-            quit,
-        }
+        (
+            Self {
+                // app,
+                // input_tx,
+                // render_state,
+                buf,
+                status,
+                quit,
+                tx,
+            },
+            rx,
+        )
     }
 
     // /// Return a reference to the shared `App` instance.
@@ -131,7 +147,7 @@ impl Tui {
 
     /// Start the render loop.
     /// The render loop reads snapshots from the shared `render_state` and renders them.
-    pub fn start_render_loop(&self) -> tokio::task::JoinHandle<()> {
+    pub fn start_render_loop(&self, mut rx: mpsc::Receiver<()>) -> tokio::task::JoinHandle<()> {
         // let render_state_clone = self.render_state.clone();
         // Prepare the terminal.
         let mut stdout = stdout();
@@ -148,6 +164,10 @@ impl Tui {
 
         spawn(async move {
             loop {
+                if rx.recv().await.is_none() {
+                    break;
+                }
+
                 if *quit_handle.read().await {
                     break;
                 };
