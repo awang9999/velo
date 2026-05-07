@@ -1,20 +1,22 @@
-use crossterm::event::{self, Event as CEvent, KeyCode, KeyModifiers};
+use std::io::stdout;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use crossterm::event::{self, Event as CEvent, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{enable_raw_mode, Clear, ClearType, EnterAlternateScreen};
 use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use std::io::stdout;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::spawn;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 
-pub struct Tui {
-    pub buf: Arc<RwLock<String>>,
-    pub status: Arc<RwLock<String>>,
-    pub quit: Arc<RwLock<bool>>,
-    pub tx: mpsc::Sender<()>,
+/// All the state that can change during the app's lifetime.
+struct EditorState {
+    buf: String,
+    status: String,
+    quit: bool,
+    seq_state: SequenceState,
+    last_event_time: Instant,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -23,96 +25,71 @@ enum SequenceState {
     AfterSuperX,
 }
 
+pub struct Tui {
+    pub state: Arc<Mutex<EditorState>>,
+    pub tx: mpsc::Sender<()>,
+}
+
 impl Tui {
     pub fn new() -> (Self, mpsc::Receiver<()>) {
-        let status = Arc::new(RwLock::new("Welcome to Velo!".to_string()));
-        let buf = Arc::new(RwLock::new("Hello Velo".to_string()));
-        let quit = Arc::new(RwLock::new(false));
         let (tx, rx) = mpsc::channel(1);
 
-        let status_for_task = Arc::clone(&status);
-        let buf_for_task = Arc::clone(&buf);
-        let quit_for_task = Arc::clone(&quit);
-        let tx_for_task = tx.clone();
+        let state = Arc::new(Mutex::new(EditorState {
+            buf: "Hello Velo".to_string(),
+            status: "Welcome to Velo!".to_string(),
+            quit: false,
+            seq_state: SequenceState::Idle,
+            last_event_time: Instant::now(),
+        }));
 
-        spawn(async move {
-            let _ = tx_for_task.send(()).await;
-            let mut seq_state = SequenceState::Idle;
-            let mut last_event = Instant::now();
+        let state_for_input = Arc::clone(&state);
+        let tx_for_input = tx.clone();
 
+        // --- 1. SYNCHRONOUS INPUT THREAD ---
+        // We use tokio::task::spawn_blocking instead of tokio::spawn because event::read() blocks.
+        tokio::task::spawn_blocking(move || {
             loop {
-                if *quit_for_task.read().await {
-                    break;
-                }
+                // Blocking call: this thread sleeps until a key is pressed
+                match event::read() {
+                    Ok(CEvent::Key(key)) => {
+                        let mut s = state_for_input.lock().unwrap();
 
-                let ev = match event::read() {
-                    Ok(e) => e,
-                    Err(e) => {
-                        let mut status_write = status_for_task.write().await;
-                        *status_write = format!("Error reading event: {}", e);
-                        let _ = tx_for_task.send(()).await;
-                        continue;
-                    }
-                };
-
-                match ev {
-                    CEvent::Key(key) => {
-                        // Reset state after 3 seconds of inactivity
-                        if last_event.elapsed() > Duration::from_secs(3) {
-                            seq_state = SequenceState::Idle;
-                            let mut status_write = status_for_task.write().await;
-                            *status_write = "None".to_string();
+                        // Handle timeout (reset state if user waits > 3s)
+                        if s.last_event_time.elapsed() > Duration::from_secs(3) {
+                            s.seq_state = SequenceState::Idle;
+                            s.status = "None".to_string();
                         }
-                        last_event = Instant::now();
+                        s.last_event_time = Instant::now();
 
-                        // FIX: We pass dependencies in and .await the result
-                        // The functions now return the NEXT state
-                        seq_state = match seq_state {
-                            SequenceState::Idle => {
-                                process_idle_key_event(
-                                    key.modifiers,
-                                    key.code,
-                                    &status_for_task,
-                                    &buf_for_task,
-                                )
-                                .await
-                            }
-                            SequenceState::AfterSuperX => {
-                                process_super_x_key_event(
-                                    key.modifiers,
-                                    key.code,
-                                    &status_for_task,
-                                    &quit_for_task,
-                                    &tx_for_task,
-                                )
-                                .await
-                            }
-                        };
+                        // Run the state machine synchronously
+                        process_key_event(&mut s, key);
 
-                        let _ = tx_for_task.send(()).await;
+                        // Signal the render loop to wake up
+                        // blocking_send is used because we are in a synchronous thread
+                        let _ = tx_for_input.blocking_send(());
+
+                        if s.quit {
+                            break;
+                        }
                     }
-                    CEvent::Resize(width, height) => {
-                        let mut status_write = status_for_task.write().await;
-                        *status_write = format!("Window resized: {}x{}", width, height);
-                        let _ = tx_for_task.send(()).await;
+                    Ok(CEvent::Resize(w, h)) => {
+                        let mut s = state_for_input.lock().unwrap();
+                        s.status = format!("Window resized: {}x{}", w, h);
+                        let _ = tx_for_input.blocking_send(());
                     }
-                    _ => {}
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("Error reading event: {}", e);
+                    }
                 }
             }
         });
 
-        (
-            Self {
-                buf,
-                status,
-                quit,
-                tx,
-            },
-            rx,
-        )
+        (Self { state, tx }, rx)
     }
 
     pub fn start_render_loop(&self, mut rx: mpsc::Receiver<()>) -> tokio::task::JoinHandle<()> {
+        // Set up terminal for Raw Input
         let mut stdout = stdout();
         enable_raw_mode().expect("Failed to enable raw mode");
         execute!(stdout, EnterAlternateScreen, Clear(ClearType::All))
@@ -121,21 +98,16 @@ impl Tui {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend).expect("Failed to create terminal");
 
-        let status_handle = Arc::clone(&self.status);
-        let buf_handle = Arc::clone(&self.buf);
-        let quit_handle = Arc::clone(&self.quit);
+        let state_handle = Arc::clone(&self.state);
 
-        spawn(async move {
-            loop {
-                if rx.recv().await.is_none() {
-                    break;
-                }
-                if *quit_handle.read().await {
-                    break;
-                }
-
-                let status_text = status_handle.read().await;
-                let buf_text = buf_handle.read().await;
+        tokio::spawn(async move {
+            // 1. Define the drawing logic so we can reuse it
+            let draw_frame = |terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+                              state_handle: &Arc<Mutex<EditorState>>| {
+                let (buf_text, status_text, _) = {
+                    let s = state_handle.lock().unwrap();
+                    (s.buf.clone(), s.status.clone(), s.quit)
+                };
 
                 terminal
                     .draw(|f| {
@@ -145,80 +117,88 @@ impl Tui {
                             .constraints([Constraint::Min(0), Constraint::Length(1)].as_ref())
                             .split(area);
 
-                        let block = Block::default().title("Velo").borders(Borders::ALL);
-                        let paragraph = Paragraph::new(buf_text.as_str())
-                            .block(block)
-                            .wrap(Wrap { trim: false });
-                        f.render_widget(paragraph, chunks[0]);
+                        f.render_widget(
+                            Paragraph::new(buf_text.as_str())
+                                .block(Block::default().title("Velo").borders(Borders::ALL))
+                                .wrap(Wrap { trim: false }),
+                            chunks[0],
+                        );
 
-                        let status_paragraph = Paragraph::new(status_text.as_str())
-                            .block(Block::default().borders(Borders::NONE))
-                            .wrap(Wrap { trim: false });
-                        f.render_widget(status_paragraph, chunks[1]);
+                        f.render_widget(
+                            Paragraph::new(status_text.as_str())
+                                .block(Block::default().borders(Borders::NONE)),
+                            chunks[1],
+                        );
                     })
                     .ok();
+            };
+
+            // 2. DRAW IMMEDIATELY ON STARTUP
+            draw_frame(&mut terminal, &state_handle);
+
+            // 3. Now enter the loop to wait for updates
+            loop {
+                if rx.recv().await.is_none() {
+                    break;
+                }
+
+                // Check for quit
+                if state_handle.lock().unwrap().quit {
+                    break;
+                }
+
+                // Draw again
+                draw_frame(&mut terminal, &state_handle);
             }
         })
     }
 }
 
-// --- Logic Helpers ---
-// These are now top-level functions that take what they need and return the next state.
-
-async fn process_idle_key_event(
-    modifiers: KeyModifiers,
-    code: KeyCode,
-    status: &Arc<RwLock<String>>,
-    buf: &Arc<RwLock<String>>,
-) -> SequenceState {
-    match (modifiers, code) {
-        (KeyModifiers::CONTROL, KeyCode::Char('x')) => {
-            let mut s = status.write().await;
-            *s = "C-x".to_string();
-            SequenceState::AfterSuperX // Transition to next state
+// --- 2. SYNCHRONOUS STATE MACHINE ---
+// This is a "pure" logic function. No async, no Arc, no Mutexes inside.
+// It just takes a mutable reference to the state and the key.
+fn process_key_event(s: &mut EditorState, key: KeyEvent) {
+    match s.seq_state {
+        SequenceState::Idle => match (key.modifiers, key.code) {
+            (KeyModifiers::CONTROL, KeyCode::Char('x')) => {
+                s.status = "C-x".to_string();
+                s.seq_state = SequenceState::AfterSuperX;
+            }
+            (_, KeyCode::Char(c)) => {
+                s.status = format!("Pressed character: {}", c);
+                s.buf.push(c);
+            }
+            (_, KeyCode::Enter) => {
+                s.status = "Enter pressed".to_string();
+            }
+            (_, KeyCode::Backspace) => {
+                s.status = "Backspace pressed".to_string();
+                s.buf.pop();
+            }
+            _ => {}
+        },
+        SequenceState::AfterSuperX => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
+                    s.status = "C-x C-g".to_string();
+                    s.seq_state = SequenceState::Idle;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
+                    s.status = "C-x C-s - file saved".to_string();
+                    s.seq_state = SequenceState::Idle;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('f')) => {
+                    s.status = "C-x C-f - open file".to_string();
+                    s.seq_state = SequenceState::Idle;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                    s.quit = true;
+                }
+                _ => {
+                    // Any other key resets the chord
+                    s.seq_state = SequenceState::Idle;
+                }
+            }
         }
-        (_, KeyCode::Char(c)) => {
-            let mut s = status.write().await;
-            *s = format!("Pressed character: {}", c);
-            let mut b = buf.write().await;
-            b.push(c);
-            SequenceState::Idle
-        }
-        (_, KeyCode::Enter) => {
-            let mut s = status.write().await;
-            *s = "Enter pressed".to_string();
-            SequenceState::Idle
-        }
-        (_, KeyCode::Backspace) => {
-            let mut s = status.write().await;
-            *s = "Backspace pressed".to_string();
-            let mut b = buf.write().await;
-            b.pop();
-            SequenceState::Idle
-        }
-        _ => SequenceState::Idle,
-    }
-}
-
-async fn process_super_x_key_event(
-    modifiers: KeyModifiers,
-    code: KeyCode,
-    status: &Arc<RwLock<String>>,
-    quit: &Arc<RwLock<bool>>,
-    tx: &mpsc::Sender<()>,
-) -> SequenceState {
-    match (modifiers, code) {
-        (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
-            let mut s = status.write().await;
-            *s = "C-x C-g".to_string();
-            SequenceState::Idle // Transition back to Idle
-        }
-        (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-            let mut q = quit.write().await;
-            *q = true;
-            let _ = tx.send(()).await;
-            SequenceState::Idle
-        }
-        _ => SequenceState::AfterSuperX,
     }
 }
